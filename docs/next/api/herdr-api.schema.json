@@ -2320,8 +2320,72 @@
                 "second"
               ],
               "type": "object"
+            },
+            {
+              "description": "A group of panes sharing one region. All panes except the expanded one\ncollapse to a one-line title bar.",
+              "properties": {
+                "expanded": {
+                  "default": 0,
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "panes": {
+                  "items": {
+                    "$ref": "#/schemas/request/$defs/LayoutPane"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "stack",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "panes"
+              ],
+              "type": "object"
             }
           ]
+        },
+        "LayoutPane": {
+          "properties": {
+            "command": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "cwd": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "env": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pane_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
         },
         "LayoutSetSplitRatioParams": {
           "properties": {
@@ -3244,6 +3308,11 @@
               "$ref": "#/schemas/request/$defs/PaneRightClickTarget",
               "default": "herdr"
             },
+            "stacked": {
+              "default": false,
+              "description": "Stack the new pane onto the target pane instead of splitting: it joins\nthe target's stack (creating one if needed) and becomes the expanded\nmember.",
+              "type": "boolean"
+            },
             "target_pane_id": {
               "type": [
                 "string",
@@ -3260,6 +3329,17 @@
           "required": [
             "direction"
           ],
+          "type": "object"
+        },
+        "PaneStackParams": {
+          "properties": {
+            "pane_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
           "type": "object"
         },
         "PaneSwapParams": {
@@ -5489,6 +5569,38 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/PaneZoomParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "pane.stack",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneStackParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "pane.unstack",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneStackParams"
             }
           },
           "required": [
@@ -7771,8 +7883,72 @@
                 "second"
               ],
               "type": "object"
+            },
+            {
+              "description": "A group of panes sharing one region. All panes except the expanded one\ncollapse to a one-line title bar.",
+              "properties": {
+                "expanded": {
+                  "default": 0,
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "panes": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/LayoutPane"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "stack",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "panes"
+              ],
+              "type": "object"
             }
           ]
+        },
+        "LayoutPane": {
+          "properties": {
+            "command": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "cwd": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "env": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pane_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
         },
         "NotificationShowReason": {
           "enum": [
@@ -8444,6 +8620,59 @@
             "offset_from_bottom",
             "max_offset_from_bottom",
             "viewport_rows"
+          ],
+          "type": "object"
+        },
+        "PaneStackReason": {
+          "enum": [
+            "single_pane",
+            "no_sibling",
+            "not_in_stack"
+          ],
+          "type": "string"
+        },
+        "PaneStackResult": {
+          "properties": {
+            "changed": {
+              "type": "boolean"
+            },
+            "focus_changed": {
+              "type": "boolean"
+            },
+            "focused_pane_id": {
+              "type": "string"
+            },
+            "layout": {
+              "$ref": "#/schemas/success_response/$defs/PaneLayoutSnapshot"
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/PaneStackReason"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "stack_changed": {
+              "type": "boolean"
+            },
+            "stacked": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "changed",
+            "stack_changed",
+            "focus_changed",
+            "pane_id",
+            "focused_pane_id",
+            "stacked",
+            "layout"
           ],
           "type": "object"
         },
@@ -9635,6 +9864,38 @@
               "required": [
                 "type",
                 "zoom"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "stack": {
+                  "$ref": "#/schemas/success_response/$defs/PaneStackResult"
+                },
+                "type": {
+                  "const": "pane_stack",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "stack"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "pane_unstack",
+                  "type": "string"
+                },
+                "unstack": {
+                  "$ref": "#/schemas/success_response/$defs/PaneStackResult"
+                }
+              },
+              "required": [
+                "type",
+                "unstack"
               ],
               "type": "object"
             },

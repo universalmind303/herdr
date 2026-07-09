@@ -522,6 +522,7 @@ pub(super) enum ClientContextMenuAction {
     SwapWithFocusedPane,
     SplitRight,
     SplitDown,
+    StackPane,
     Zoom,
     ToggleRightClickPassthrough,
     ClosePane,

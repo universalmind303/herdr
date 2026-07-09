@@ -147,6 +147,10 @@ pub enum Method {
     PaneMove(PaneMoveParams),
     #[serde(rename = "pane.zoom")]
     PaneZoom(PaneZoomParams),
+    #[serde(rename = "pane.stack")]
+    PaneStack(PaneStackParams),
+    #[serde(rename = "pane.unstack")]
+    PaneUnstack(PaneStackParams),
     #[serde(rename = "pane.layout")]
     PaneLayout(PaneLayoutParams),
     #[serde(rename = "pane.process_info")]

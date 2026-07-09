@@ -443,6 +443,12 @@ pub struct KeysConfig {
     /// Toggle zoom for the focused pane. Default: "prefix+z"
     #[serde(alias = "fullscreen")]
     pub zoom: BindingConfig,
+    /// Open a new pane stacked onto the focused pane. Default: "prefix+shift+s"
+    pub stack_pane: BindingConfig,
+    /// Peel one edge pane off the focused pane's stack. Default: "prefix+shift+u"
+    pub unstack_pane: BindingConfig,
+    /// Break the focused pane out into a new tab. Default: "prefix+shift+b"
+    pub break_pane: BindingConfig,
     /// Enter resize mode. Default: "prefix+r"
     pub resize_mode: BindingConfig,
     /// Resize the focused pane toward the left. Unset by default.
@@ -1171,6 +1177,9 @@ impl Default for KeysConfig {
             split_horizontal: BindingConfig::one("prefix+minus"),
             close_pane: BindingConfig::one("prefix+x"),
             zoom: BindingConfig::one("prefix+z"),
+            stack_pane: BindingConfig::one("prefix+shift+s"),
+            unstack_pane: BindingConfig::one("prefix+shift+u"),
+            break_pane: BindingConfig::one("prefix+shift+b"),
             resize_mode: BindingConfig::one("prefix+r"),
             resize_pane_left: BindingConfig::empty(),
             resize_pane_down: BindingConfig::empty(),

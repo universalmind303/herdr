@@ -1110,6 +1110,10 @@ impl App {
             Method::PaneSwap(params) => return self.handle_pane_swap(request.id, params),
             Method::PaneMove(params) => return self.handle_pane_move(request.id, params),
             Method::PaneZoom(params) => return self.handle_pane_zoom(request.id, params),
+            Method::PaneStack(params) => return self.handle_pane_stack(request.id, params),
+            Method::PaneUnstack(params) => {
+                return self.handle_pane_unstack(request.id, params);
+            }
             Method::PaneLayout(params) => return self.handle_pane_layout(request.id, params),
             Method::PaneProcessInfo(params) => {
                 return self.handle_pane_process_info(request.id, params);

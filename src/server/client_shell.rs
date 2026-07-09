@@ -409,6 +409,12 @@ pub(super) fn render_pane_surface(
         .iter()
         .map(|pane| pane.rect)
         .collect::<Vec<_>>();
+    let collapsed_bars = layout
+        .pane_infos
+        .iter()
+        .filter(|pane| pane.collapsed)
+        .map(|pane| pane.rect)
+        .collect::<Vec<_>>();
     let splits = layout
         .split_borders
         .iter()
@@ -419,6 +425,7 @@ pub(super) fn render_pane_surface(
                 app.state.pane_gaps,
                 &pane_frames,
             )?;
+            let hit_rect = exclude_collapsed_bars(hit_rect, split.direction, &collapsed_bars)?;
             let direction = match split.direction {
                 ratatui::layout::Direction::Horizontal => {
                     protocol::PaneSurfaceSplitDirection::Horizontal
@@ -625,9 +632,71 @@ fn split_hit_rect(
     Some(hit)
 }
 
+/// A collapsed stack bar can share its row with a split divider's grab zone.
+/// Clicking the bar must focus it rather than start a resize drag, so carve
+/// the bar out of the hit rect and keep the larger remaining piece.
+fn exclude_collapsed_bars(
+    mut hit: Rect,
+    direction: ratatui::layout::Direction,
+    collapsed_bars: &[Rect],
+) -> Option<Rect> {
+    for bar in collapsed_bars {
+        let intersection = hit.intersection(*bar);
+        if intersection.is_empty() {
+            continue;
+        }
+        hit = match direction {
+            ratatui::layout::Direction::Vertical => {
+                let before = intersection.x.saturating_sub(hit.x);
+                let after = hit.right().saturating_sub(intersection.right());
+                if before >= after {
+                    Rect::new(hit.x, hit.y, before, hit.height)
+                } else {
+                    Rect::new(intersection.right(), hit.y, after, hit.height)
+                }
+            }
+            ratatui::layout::Direction::Horizontal => {
+                let before = intersection.y.saturating_sub(hit.y);
+                let after = hit.bottom().saturating_sub(intersection.bottom());
+                if before >= after {
+                    Rect::new(hit.x, hit.y, hit.width, before)
+                } else {
+                    Rect::new(hit.x, intersection.bottom(), hit.width, after)
+                }
+            }
+        };
+        if hit.is_empty() {
+            return None;
+        }
+    }
+    Some(hit)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collapsed_stack_bar_is_carved_out_of_split_hit_rect() {
+        use ratatui::layout::Direction;
+        let hit = Rect::new(0, 10, 100, 1);
+        // Bar covers the right half of the divider row: the left half stays
+        // draggable.
+        assert_eq!(
+            exclude_collapsed_bars(hit, Direction::Vertical, &[Rect::new(50, 10, 50, 1)]),
+            Some(Rect::new(0, 10, 50, 1))
+        );
+        // Bar covers the whole divider row: no drag target remains.
+        assert_eq!(
+            exclude_collapsed_bars(hit, Direction::Vertical, &[Rect::new(0, 10, 100, 1)]),
+            None
+        );
+        // Bars elsewhere leave the hit rect alone.
+        assert_eq!(
+            exclude_collapsed_bars(hit, Direction::Vertical, &[Rect::new(0, 12, 100, 1)]),
+            Some(hit)
+        );
+    }
 
     #[test]
     fn snapshot_projects_cached_release_and_update_facts() {

@@ -675,3 +675,91 @@ fn every_configured_prefix_enters_prefix_mode() {
         assert_eq!(state.mode, ClientShellMode::Terminal);
     }
 }
+
+fn prefix_action_requests(
+    state: &mut ClientShellState,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+) -> Vec<crate::api::schema::Method> {
+    let _ = state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
+        KeyCode::Char('b'),
+        KeyModifiers::CONTROL,
+    ))]);
+    assert_eq!(state.mode, ClientShellMode::Prefix);
+    let outcome = state.handle_raw_events(vec![RawInputEvent::Key(
+        crate::input::TerminalKey::new(code, modifiers),
+    )]);
+    outcome
+        .actions
+        .iter()
+        .filter_map(|action| match action {
+            ClientShellAction::Endpoint { request, .. } => Some(request.method.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn prefix_stack_and_unstack_route_to_endpoint_methods() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+
+    let methods = prefix_action_requests(&mut state, KeyCode::Char('S'), KeyModifiers::SHIFT);
+    assert!(
+        matches!(
+            &methods[..],
+            [crate::api::schema::Method::PaneSplit(params)]
+                if params.stacked
+                    && params.focus
+                    && params.target_pane_id.as_deref() == Some("pane_1")
+        ),
+        "{methods:?}"
+    );
+
+    let methods = prefix_action_requests(&mut state, KeyCode::Char('U'), KeyModifiers::SHIFT);
+    assert!(
+        matches!(
+            &methods[..],
+            [crate::api::schema::Method::PaneUnstack(params)]
+                if params.pane_id.as_deref() == Some("pane_1")
+        ),
+        "{methods:?}"
+    );
+}
+
+#[test]
+fn prefix_break_pane_moves_focused_pane_into_new_tab_with_its_label() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+
+    let methods = prefix_action_requests(&mut state, KeyCode::Char('B'), KeyModifiers::SHIFT);
+    assert!(
+        methods.is_empty(),
+        "breaking a tab's only pane is a no-op: {methods:?}"
+    );
+
+    let mut two_panes = snapshot();
+    two_panes.panes[0].label = Some("build".into());
+    let mut other = two_panes.panes[0].clone();
+    other.pane_id = "pane_2".into();
+    other.label = None;
+    other.focused = false;
+    two_panes.panes.push(other);
+    state.set_snapshot(Box::new(two_panes));
+
+    let methods = prefix_action_requests(&mut state, KeyCode::Char('B'), KeyModifiers::SHIFT);
+    assert!(
+        matches!(
+            &methods[..],
+            [crate::api::schema::Method::PaneMove(params)]
+                if params.pane_id == "pane_1"
+                    && params.focus
+                    && matches!(
+                        &params.destination,
+                        crate::api::schema::PaneMoveDestination::NewTab { label, .. }
+                            if label.as_deref() == Some("build")
+                    )
+        ),
+        "{methods:?}"
+    );
+}

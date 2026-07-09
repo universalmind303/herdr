@@ -2,6 +2,7 @@ use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
@@ -245,6 +246,11 @@ pub(super) fn resize_tab_panes(
         app.pane_gaps,
         app.pane_outer_borders,
     ) {
+        // Collapsed stack panes keep their runtime at the expanded size so
+        // expanding them later is instant, mirroring hidden zoomed panes.
+        if info.collapsed {
+            continue;
+        }
         let pane_inner = pane_inner_rect(info.rect, info.borders);
 
         if let Some((terminal_id, rt)) =
@@ -316,6 +322,7 @@ pub(super) fn compute_pane_infos_for_tab(
             scrollbar_rect,
             borders,
             is_focused: true,
+            collapsed: false,
         }];
     }
 
@@ -328,6 +335,14 @@ pub(super) fn compute_pane_infos_for_tab(
 
     for info in &mut pane_infos {
         let pane_inner = pane_inner_rect(info.rect, info.borders);
+
+        // Collapsed stack panes render as a one-line title bar with no
+        // content area, and their runtime keeps the expanded size.
+        if info.collapsed {
+            info.inner_rect = Rect::new(pane_inner.x, pane_inner.y, pane_inner.width, 0);
+            info.scrollbar_rect = None;
+            continue;
+        }
 
         let mut inner_rect = pane_inner;
         let mut scrollbar_rect = None;
@@ -401,6 +416,9 @@ pub(super) fn render_panes(
     };
 
     for info in pane_infos {
+        if info.collapsed {
+            continue;
+        }
         if let Some(rt) = app.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, info.id) {
             let show_cursor = info.is_focused
                 && !pane_is_scrolled_back(rt)
@@ -422,6 +440,7 @@ pub(super) fn render_panes(
     }
 
     render_pane_borders(app, ws, pane_infos, split_borders, frame);
+    render_collapsed_stack_bars(app, terminal_runtimes, ws_idx, ws, pane_infos, frame);
 }
 
 pub(crate) fn popup_pane_rects(app: &AppState, area: Rect) -> Option<(Rect, Rect)> {
@@ -452,6 +471,117 @@ pub(super) fn resize_popup_pane(
             cell_size.width_px,
             cell_size.height_px,
         );
+    }
+}
+
+/// Draw the one-line title bar for each collapsed stack pane: agent icon,
+/// label, and agent status. Runs regardless of the pane border setting so
+/// collapsed panes stay identifiable in borderless layouts; without borders
+/// the row is filled with a horizontal rule first, mirroring zellij's
+/// one-liner frames.
+fn render_collapsed_stack_bars(
+    app: &AppState,
+    terminal_runtimes: &TerminalRuntimeRegistry,
+    ws_idx: usize,
+    ws: &crate::workspace::Workspace,
+    pane_infos: &[PaneInfo],
+    frame: &mut Frame,
+) {
+    let buf = frame.buffer_mut();
+    let area = buf.area;
+    for info in pane_infos {
+        if !info.collapsed || info.rect.width <= 4 || info.rect.height == 0 {
+            continue;
+        }
+        let y = info.rect.y;
+        if y < area.y || y >= area.y.saturating_add(area.height) {
+            continue;
+        }
+        let Some(pane) = ws.pane_state(info.id) else {
+            continue;
+        };
+        let Some(terminal) = app.terminals.get(&pane.attached_terminal_id) else {
+            continue;
+        };
+
+        // Label priority mirrors pane border titles, then falls back to the
+        // terminal-reported OSC title the way zellij names its panes.
+        let label = terminal
+            .border_label(app.show_agent_labels_on_pane_borders)
+            .or_else(|| {
+                app.runtime_for_pane_in_workspace(terminal_runtimes, ws_idx, info.id)
+                    .map(|rt| rt.agent_osc_title().trim().to_string())
+                    .filter(|title| !title.is_empty())
+            })
+            .unwrap_or_else(|| match ws.public_pane_numbers.get(&info.id) {
+                Some(number) => format!("pane {number}"),
+                None => "pane".to_string(),
+            });
+
+        let p = &app.palette;
+        if !app.pane_borders.draws_borders() {
+            let fill_rect = Rect::new(info.rect.x, y, info.rect.width, 1);
+            let fill = "─".repeat(info.rect.width as usize);
+            frame.render_widget(
+                Paragraph::new(Span::styled(fill, Style::default().fg(p.overlay0))),
+                fill_rect,
+            );
+        }
+        let label_color = if info.is_focused {
+            p.accent
+        } else {
+            p.overlay0
+        };
+        let mut label_style = Style::default().fg(label_color);
+        if info.is_focused {
+            label_style = label_style.add_modifier(Modifier::BOLD);
+        }
+
+        let mut spans = Vec::new();
+        if terminal.is_agent_terminal() {
+            let (icon, status, status_color) =
+                collapsed_bar_agent_status(terminal.state, pane.seen, p);
+            spans.push(Span::styled(
+                format!(" {icon} "),
+                Style::default().fg(status_color),
+            ));
+            spans.push(Span::styled(label, label_style));
+            spans.push(Span::styled(
+                format!(" · {status} "),
+                Style::default().fg(status_color),
+            ));
+        } else {
+            spans.push(Span::styled(format!(" {label} "), label_style));
+        }
+
+        let start_x = info.rect.x.saturating_add(1);
+        let end_x = info
+            .rect
+            .x
+            .saturating_add(info.rect.width)
+            .saturating_sub(1)
+            .min(area.x.saturating_add(area.width));
+        if start_x >= end_x {
+            continue;
+        }
+        let max_width = end_x.saturating_sub(start_x);
+        let bar_rect = Rect::new(start_x, y, max_width, 1);
+        frame.render_widget(Paragraph::new(Line::from(spans)), bar_rect);
+    }
+}
+
+fn collapsed_bar_agent_status(
+    state: crate::detect::AgentState,
+    seen: bool,
+    p: &Palette,
+) -> (&'static str, &'static str, Color) {
+    use crate::detect::AgentState;
+    match (state, seen) {
+        (AgentState::Working, _) => ("●", "working", p.yellow),
+        (AgentState::Blocked, _) => ("●", "blocked", p.red),
+        (AgentState::Idle, false) => ("●", "done", p.teal),
+        (AgentState::Idle, true) => ("○", "idle", p.green),
+        (AgentState::Unknown, _) => ("·", "unknown", p.overlay0),
     }
 }
 
@@ -641,7 +771,7 @@ fn render_pane_border_titles(
     let buf = frame.buffer_mut();
     let area = buf.area;
     for info in pane_infos {
-        if !info.borders.contains(Borders::TOP) || info.rect.width <= 4 {
+        if !info.borders.contains(Borders::TOP) || info.rect.width <= 4 || info.collapsed {
             continue;
         }
         let Some(title) = ws
@@ -932,6 +1062,7 @@ mod tests {
             scrollbar_rect: None,
             borders: Borders::ALL,
             is_focused: false,
+            collapsed: false,
         }];
 
         let terminal_id = ws.tabs[0].panes[&pane_id].attached_terminal_id.clone();
@@ -1116,6 +1247,7 @@ mod tests {
                 scrollbar_rect: None,
                 borders: Borders::TOP | Borders::LEFT,
                 is_focused: true,
+                collapsed: false,
             },
             PaneInfo {
                 id: PaneId::from_raw(2),
@@ -1124,6 +1256,7 @@ mod tests {
                 scrollbar_rect: None,
                 borders: Borders::TOP | Borders::LEFT | Borders::RIGHT,
                 is_focused: false,
+                collapsed: false,
             },
             PaneInfo {
                 id: PaneId::from_raw(3),
@@ -1132,6 +1265,7 @@ mod tests {
                 scrollbar_rect: None,
                 borders: Borders::TOP | Borders::LEFT | Borders::BOTTOM,
                 is_focused: false,
+                collapsed: false,
             },
             PaneInfo {
                 id: PaneId::from_raw(4),
@@ -1140,6 +1274,7 @@ mod tests {
                 scrollbar_rect: None,
                 borders: Borders::ALL,
                 is_focused: false,
+                collapsed: false,
             },
         ];
         let split_borders = vec![
@@ -1186,6 +1321,7 @@ mod tests {
                 scrollbar_rect: None,
                 borders: Borders::ALL,
                 is_focused: true,
+                collapsed: false,
             },
             PaneInfo {
                 id: PaneId::from_raw(2),
@@ -1194,6 +1330,7 @@ mod tests {
                 scrollbar_rect: None,
                 borders: Borders::ALL,
                 is_focused: false,
+                collapsed: false,
             },
         ];
         let ws = Workspace::test_new("test");

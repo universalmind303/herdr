@@ -103,7 +103,7 @@ Raw socket method names use dot notation:
 | Workspace | `workspace.create`, `workspace.list`, `workspace.get`, `workspace.focus`, `workspace.rename`, `workspace.move`, `workspace.move_block`, `workspace.report_metadata`, `workspace.close` |
 | Worktree | `worktree.list`, `worktree.create`, `worktree.open`, `worktree.remove` |
 | Tab | `tab.create`, `tab.list`, `tab.get`, `tab.focus`, `tab.rename`, `tab.move`, `tab.close` |
-| Pane | `pane.split`, `pane.swap`, `pane.move`, `pane.zoom`, `pane.layout`, `pane.process_info`, `pane.neighbor`, `pane.edges`, `pane.focus_direction`, `pane.resize`, `pane.list`, `pane.current`, `pane.get`, `pane.rename`, `pane.send_text`, `pane.send_keys`, `pane.send_input`, `pane.read`, `pane.report_agent`, `pane.report_agent_session`, `pane.report_metadata`, `pane.clear_agent_authority`, `pane.release_agent`, `pane.close`, `pane.wait_for_output` |
+| Pane | `pane.split`, `pane.swap`, `pane.move`, `pane.zoom`, `pane.stack`, `pane.unstack`, `pane.layout`, `pane.process_info`, `pane.neighbor`, `pane.edges`, `pane.focus_direction`, `pane.resize`, `pane.list`, `pane.current`, `pane.get`, `pane.rename`, `pane.send_text`, `pane.send_keys`, `pane.send_input`, `pane.read`, `pane.report_agent`, `pane.report_agent_session`, `pane.report_metadata`, `pane.clear_agent_authority`, `pane.release_agent`, `pane.close`, `pane.wait_for_output` |
 | Popup | `popup.close` |
 | Layout | `layout.export`, `layout.apply`, `layout.set_split_ratio` |
 | Agent | `agent.list`, `agent.get`, `agent.read`, `agent.explain`, `agent.send_keys`, `agent.prompt`, `agent.wait`, `agent.rename`, `agent.focus`, `agent.start`, `agent.view.set`, `agent.view.clear` |
@@ -305,6 +305,34 @@ Omitting `pane_id` targets the server's active focused pane. The response is
 `reason`, `pane_id`, `focused_pane_id`, `zoomed`, and `layout`. `changed` is
 true when either zoom state or focus changed. Reason values are `single_pane`,
 `already_zoomed`, and `already_unzoomed`.
+
+Stacked panes share one region inside the pane's layout slot: the expanded
+pane keeps the space and every other member collapses to a one-line title
+bar, leaving surrounding splits untouched. Focusing a collapsed pane expands
+it. Directional splits treat a stack as a single pane and split its whole
+region, while `pane.split` with `stacked: true` adds the new pane to the
+target's stack instead, creating one if needed (this is what the `stack_pane`
+keybind and the pane context menu use). `pane.stack` merges the target pane
+with its layout sibling into one stack — an API/CLI operation for gathering
+existing panes, with no default keybinding.
+`pane.unstack` peels one edge pane off the target's stack, as in zellij: the
+top pane breaks out upward when the expanded pane sits at the bottom of the
+stack, otherwise the bottom pane breaks out downward; a stack left with one
+pane dissolves.
+
+```json
+{"id":"req_stack","method":"pane.stack","params":{"pane_id":"w1:p1"}}
+{"id":"req_unstack","method":"pane.unstack","params":{"pane_id":"w1:p1"}}
+{"id":"req_split_stacked","method":"pane.split","params":{"pane_id":"w1:p1","direction":"down","stacked":true}}
+```
+
+Omitting `pane_id` targets the server's active focused pane. The responses are
+`type: "pane_stack"` and `type: "pane_unstack"` with `changed`,
+`stack_changed`, `focus_changed`, optional `reason`, `pane_id`,
+`focused_pane_id`, `stacked`, and `layout`. Reason values are `single_pane`,
+`no_sibling`, and `not_in_stack`. Layout trees returned by `pane.layout` and
+`layout.export` describe a stack as a `stack` node with `panes` and an
+`expanded` index, and `layout.apply` accepts the same node shape.
 
 The CLI wrapper for `notification.show` is:
 

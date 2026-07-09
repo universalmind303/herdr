@@ -852,9 +852,10 @@ impl ClientShellState {
         action: crate::input::KeybindAction,
     ) -> Option<crate::api::schema::Method> {
         use crate::api::schema::{
-            Method, PaneDirection, PaneFocusDirectionParams, PaneResizeParams, PaneSplitParams,
-            PaneSwapParams, PaneTarget, PaneZoomMode, PaneZoomParams, SplitDirection,
-            TabCreateParams, TabMoveParams, TabTarget, WorkspaceTarget,
+            Method, PaneDirection, PaneFocusDirectionParams, PaneMoveDestination, PaneMoveParams,
+            PaneResizeParams, PaneSplitParams, PaneStackParams, PaneSwapParams, PaneTarget,
+            PaneZoomMode, PaneZoomParams, SplitDirection, TabCreateParams, TabMoveParams,
+            TabTarget, WorkspaceTarget,
         };
         use crate::input::KeybindAction;
 
@@ -1048,6 +1049,7 @@ impl ClientShellState {
                     focus: true,
                     right_click: Default::default(),
                     env: Default::default(),
+                    stacked: false,
                 }))
             }
             KeybindAction::ClosePane => Some(Method::PaneClose(PaneTarget {
@@ -1092,6 +1094,45 @@ impl ClientShellState {
                 pane_id: focused_pane,
                 mode: PaneZoomMode::Toggle,
             })),
+            KeybindAction::StackPane => Some(Method::PaneSplit(PaneSplitParams {
+                workspace_id: Some(focused_workspace),
+                target_pane_id: focused_pane,
+                direction: SplitDirection::Down,
+                ratio: None,
+                cwd: None,
+                focus: true,
+                right_click: Default::default(),
+                env: Default::default(),
+                stacked: true,
+            })),
+            KeybindAction::UnstackPane => Some(Method::PaneUnstack(PaneStackParams {
+                pane_id: focused_pane,
+            })),
+            KeybindAction::BreakPane => {
+                let focused_tab = focused_tab?;
+                let focused_pane = focused_pane?;
+                let tab_panes = snapshot
+                    .panes
+                    .iter()
+                    .filter(|pane| pane.tab_id == focused_tab)
+                    .count();
+                if tab_panes <= 1 {
+                    return None;
+                }
+                let label = snapshot
+                    .panes
+                    .iter()
+                    .find(|pane| pane.pane_id == focused_pane)
+                    .and_then(|pane| pane.label.clone());
+                Some(Method::PaneMove(PaneMoveParams {
+                    pane_id: focused_pane,
+                    destination: PaneMoveDestination::NewTab {
+                        workspace_id: None,
+                        label,
+                    },
+                    focus: true,
+                }))
+            }
             KeybindAction::ClearPane => Some(Method::PaneClear(PaneTarget {
                 pane_id: focused_pane?,
             })),

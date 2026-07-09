@@ -28,12 +28,15 @@ const CLIENT_SHELL_METHODS: &[&str] = &[
     "pane.input.set",
     "pane.link.activate",
     "pane.link.resolve",
+    "pane.move",
     "pane.rename",
     "pane.resize",
     "pane.scroll",
     "pane.selection.read",
     "pane.split",
+    "pane.stack",
     "pane.swap",
+    "pane.unstack",
     "pane.zoom",
     "product_announcement.dismiss",
     "release_notes.dismiss",
@@ -296,6 +299,30 @@ mod tests {
         assert_eq!(
             actual.remove("pane.link.resolve").as_deref(),
             Some("f5e4a3e01453ae7b188f127ce951c12c20e0bebcc17cc364eeb6d1a01fd5bf81")
+        );
+        // Fork: pane stacking. `pane.split` gains the optional `stacked` field
+        // (a server without it ignores the field and performs a plain split),
+        // and the stack/unstack/break actions add these methods.
+        assert_eq!(
+            actual.remove("pane.move").as_deref(),
+            Some("eaed63cf205db2dc043ecce9e1a79cdca7f6e2521b364226bbf3121affadce7c")
+        );
+        assert_eq!(
+            actual.remove("pane.stack").as_deref(),
+            Some("1a99d37d5b4677a6e0708524ab2ff93b885e2afad0921be97b4f32712d50b0d0")
+        );
+        assert_eq!(
+            actual.remove("pane.unstack").as_deref(),
+            Some("f5c516373814e6c61cdebc2b8311eec4367fac865fe94ec87297e7ce210ccd9a")
+        );
+        assert_eq!(
+            actual
+                .insert(
+                    "pane.split".into(),
+                    "5d740322cac5287070194fb522c8135795a6f877b44652ea4959c63b4c67cefd".into(),
+                )
+                .as_deref(),
+            Some("ff4f97f26fe8aa56576156a80e2984c84cc9e392f8c442c8ef04065681c66dc9")
         );
 
         assert_eq!(

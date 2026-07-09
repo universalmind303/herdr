@@ -62,6 +62,7 @@ impl ClientContextMenuOverlay {
                 items.extend([
                     item("Split right", Action::SplitRight),
                     item("Split down", Action::SplitDown),
+                    item("Stack pane", Action::StackPane),
                     item("Zoom", Action::Zoom),
                     item(
                         if *right_click_passthrough {
@@ -434,10 +435,25 @@ impl ClientShellState {
                         focus: true,
                         right_click: Default::default(),
                         env: Default::default(),
+                        stacked: false,
                     }),
                     outcome,
                 );
             }
+            ClientContextMenuAction::StackPane => self.push_endpoint_method(
+                Method::PaneSplit(PaneSplitParams {
+                    workspace_id: Some(workspace_id),
+                    target_pane_id: Some(pane_id),
+                    direction: SplitDirection::Down,
+                    ratio: None,
+                    cwd: None,
+                    focus: true,
+                    right_click: Default::default(),
+                    env: Default::default(),
+                    stacked: true,
+                }),
+                outcome,
+            ),
             ClientContextMenuAction::Zoom => self.push_endpoint_method(
                 Method::PaneZoom(PaneZoomParams {
                     pane_id: Some(pane_id),

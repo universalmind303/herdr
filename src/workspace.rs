@@ -1347,6 +1347,9 @@ impl Workspace {
                 "workspace {} tab {} layout panes must exactly match pane states",
                 self.id, tab_idx
             );
+            if let Some(violation) = tab.layout.stack_invariant_violation() {
+                panic!("workspace {} tab {} {}", self.id, tab_idx, violation);
+            }
 
             for (pane_id, pane) in &tab.panes {
                 assert!(

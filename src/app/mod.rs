@@ -2659,6 +2659,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pane_split_stacked_joins_target_into_stack() {
+        let _guard = config_env_lock().lock().unwrap();
+        let original_shell = std::env::var_os("SHELL");
+        std::env::set_var("SHELL", exiting_test_command());
+
+        let mut app = test_app();
+        let workspace = Workspace::test_new("api-pane-split-stacked");
+        let target_pane = workspace.tabs[0].root_pane;
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+
+        let target_pane_id = app.pane_info(0, target_pane).unwrap().pane_id;
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "req_pane_split_stacked".into(),
+            method: crate::api::schema::Method::PaneSplit(crate::api::schema::PaneSplitParams {
+                workspace_id: None,
+                target_pane_id: Some(target_pane_id),
+                direction: crate::api::schema::SplitDirection::Down,
+                ratio: None,
+                cwd: None,
+                focus: true,
+                right_click: Default::default(),
+                env: Default::default(),
+                stacked: true,
+            }),
+        });
+        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+
+        assert_eq!(response["result"]["type"], "pane_info");
+        let tab = &app.state.workspaces[0].tabs[0];
+        assert_eq!(tab.layout.pane_count(), 2);
+        assert!(tab.layout.pane_in_stack(target_pane));
+        let focused = tab.layout.focused();
+        assert_ne!(focused, target_pane);
+        assert!(tab.layout.pane_in_stack(focused));
+        assert_eq!(
+            tab.layout.expanded_pane_of_stack_containing(target_pane),
+            Some(focused)
+        );
+        app.state.workspaces[0].assert_invariants_for_test();
+
+        let runtimes: Vec<_> = app.terminal_runtimes.drain().collect();
+        for (_terminal_id, runtime) in runtimes {
+            runtime.shutdown();
+        }
+        match original_shell {
+            Some(value) => std::env::set_var("SHELL", value),
+            None => std::env::remove_var("SHELL"),
+        }
+    }
+
+    #[tokio::test]
     async fn pane_split_request_focuses_new_pane_when_requested() {
         let _guard = config_env_lock().lock().unwrap();
         let original_shell = std::env::var_os("SHELL");
@@ -2688,6 +2742,7 @@ mod tests {
                 focus: true,
                 right_click: Default::default(),
                 env: Default::default(),
+                stacked: false,
             }),
         });
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();
@@ -2735,6 +2790,7 @@ mod tests {
                 focus: false,
                 right_click: crate::api::schema::PaneRightClickTarget::Pane,
                 env: Default::default(),
+                stacked: false,
             }),
         });
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();
@@ -2790,6 +2846,7 @@ mod tests {
                 focus: false,
                 right_click: Default::default(),
                 env: Default::default(),
+                stacked: false,
             }),
         });
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();

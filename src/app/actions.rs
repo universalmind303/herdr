@@ -732,6 +732,21 @@ pub(crate) struct PaneZoomOutcome {
     pub zoomed: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PaneStackNoopReason {
+    SinglePane,
+    NoSibling,
+    NotInStack,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PaneStackOutcome {
+    pub changed: bool,
+    pub focus_changed: bool,
+    pub reason: Option<PaneStackNoopReason>,
+    pub stacked: bool,
+}
+
 impl AppState {
     #[cfg(test)]
     pub fn navigate_pane(&mut self, direction: NavDirection) {
@@ -748,7 +763,22 @@ impl AppState {
         };
 
         if let Some(focused) = panes.iter().find(|p| p.is_focused) {
-            if let Some(target) = find_in_direction(focused, direction, &panes) {
+            if let Some(mut target) = find_in_direction(focused, direction, &panes) {
+                // Horizontal moves into a stack land on its expanded member,
+                // as in zellij; vertical moves walk the stack member by
+                // member.
+                if matches!(direction, NavDirection::Left | NavDirection::Right)
+                    && panes.iter().any(|p| p.id == target && p.collapsed)
+                {
+                    if let Some(expanded) = self
+                        .workspaces
+                        .get(ws_idx)
+                        .and_then(|ws| ws.active_tab())
+                        .and_then(|tab| tab.layout.expanded_pane_of_stack_containing(target))
+                    {
+                        target = expanded;
+                    }
+                }
                 self.focus_pane_in_workspace(ws_idx, target);
             }
         }
@@ -876,6 +906,98 @@ impl AppState {
             return;
         };
         self.apply_pane_zoom(ws_idx, pane_id, PaneZoomCommand::Toggle);
+    }
+
+    /// Merge the pane with its layout sibling into a stack.
+    pub(crate) fn apply_pane_stack(
+        &mut self,
+        ws_idx: usize,
+        pane_id: PaneId,
+    ) -> Option<PaneStackOutcome> {
+        let tab_idx = self
+            .workspaces
+            .get(ws_idx)?
+            .find_tab_index_for_pane(pane_id)?;
+        let focus_changed = self.focus_pane_in_workspace(ws_idx, pane_id);
+        let tab = self
+            .workspaces
+            .get_mut(ws_idx)
+            .and_then(|ws| ws.tabs.get_mut(tab_idx))?;
+        if tab.layout.pane_count() <= 1 {
+            return Some(PaneStackOutcome {
+                changed: false,
+                focus_changed,
+                reason: Some(PaneStackNoopReason::SinglePane),
+                stacked: false,
+            });
+        }
+        let changed = tab.layout.stack_focused();
+        let stacked = tab.layout.pane_in_stack(pane_id);
+        if changed {
+            self.mark_session_dirty();
+        }
+        Some(PaneStackOutcome {
+            changed,
+            focus_changed,
+            reason: (!changed).then_some(PaneStackNoopReason::NoSibling),
+            stacked,
+        })
+    }
+
+    /// Break the pane out of its stack.
+    pub(crate) fn apply_pane_unstack(
+        &mut self,
+        ws_idx: usize,
+        pane_id: PaneId,
+    ) -> Option<PaneStackOutcome> {
+        let tab_idx = self
+            .workspaces
+            .get(ws_idx)?
+            .find_tab_index_for_pane(pane_id)?;
+        let focus_changed = self.focus_pane_in_workspace(ws_idx, pane_id);
+        let tab = self
+            .workspaces
+            .get_mut(ws_idx)
+            .and_then(|ws| ws.tabs.get_mut(tab_idx))?;
+        if !tab.layout.pane_in_stack(pane_id) {
+            return Some(PaneStackOutcome {
+                changed: false,
+                focus_changed,
+                reason: Some(PaneStackNoopReason::NotInStack),
+                stacked: false,
+            });
+        }
+        let changed = tab.layout.unstack_focused();
+        let stacked = tab.layout.pane_in_stack(pane_id);
+        if changed {
+            self.mark_session_dirty();
+        }
+        Some(PaneStackOutcome {
+            changed,
+            focus_changed,
+            reason: (!changed).then_some(PaneStackNoopReason::NotInStack),
+            stacked,
+        })
+    }
+
+    #[cfg(test)]
+    pub fn stack_pane(&mut self) -> Option<PaneStackOutcome> {
+        let ws_idx = self.active?;
+        let pane_id = self
+            .workspaces
+            .get(ws_idx)
+            .and_then(crate::workspace::Workspace::focused_pane_id)?;
+        self.apply_pane_stack(ws_idx, pane_id)
+    }
+
+    #[cfg(test)]
+    pub fn unstack_pane(&mut self) -> Option<PaneStackOutcome> {
+        let ws_idx = self.active?;
+        let pane_id = self
+            .workspaces
+            .get(ws_idx)
+            .and_then(crate::workspace::Workspace::focused_pane_id)?;
+        self.apply_pane_unstack(ws_idx, pane_id)
     }
 
     pub(crate) fn workspace_close_indices(&self, ws_idx: usize) -> Vec<usize> {
@@ -4370,6 +4492,156 @@ mod tests {
         let mut state = app_with_workspaces(&["test"]);
         state.toggle_zoom();
         assert!(!state.workspaces[0].zoomed);
+    }
+
+    #[test]
+    fn stack_pane_merges_focused_with_sibling() {
+        let mut state = app_with_workspaces(&["test"]);
+        let root = state.workspaces[0].tabs[0].root_pane;
+        let right = state.workspaces[0].test_split(Direction::Horizontal);
+        state.workspaces[0].layout.focus_pane(root);
+
+        let outcome = state.stack_pane().expect("stack outcome");
+
+        assert!(outcome.changed);
+        assert!(outcome.stacked);
+        assert!(state.workspaces[0].layout.pane_in_stack(root));
+        assert!(state.workspaces[0].layout.pane_in_stack(right));
+        assert_eq!(state.workspaces[0].focused_pane_id(), Some(root));
+        state.workspaces[0].assert_invariants_for_test();
+    }
+
+    #[test]
+    fn stack_pane_single_pane_noop() {
+        let mut state = app_with_workspaces(&["test"]);
+
+        let outcome = state.stack_pane().expect("stack outcome");
+
+        assert!(!outcome.changed);
+        assert_eq!(outcome.reason, Some(PaneStackNoopReason::SinglePane));
+    }
+
+    #[test]
+    fn unstack_pane_dissolves_two_pane_stack() {
+        let mut state = app_with_workspaces(&["test"]);
+        let root = state.workspaces[0].tabs[0].root_pane;
+        state.workspaces[0].test_split(Direction::Horizontal);
+        state.workspaces[0].layout.focus_pane(root);
+        state.stack_pane().expect("stack outcome");
+
+        let outcome = state.unstack_pane().expect("unstack outcome");
+
+        assert!(outcome.changed);
+        assert!(!outcome.stacked);
+        assert!(!state.workspaces[0].layout.pane_in_stack(root));
+        state.workspaces[0].assert_invariants_for_test();
+    }
+
+    #[test]
+    fn unstack_pane_peels_edge_member_and_keeps_focused_stacked() {
+        let mut state = app_with_workspaces(&["test"]);
+        let root = state.workspaces[0].tabs[0].root_pane;
+        let second = state.workspaces[0].test_split(Direction::Horizontal);
+        let third = state.workspaces[0].test_split(Direction::Horizontal);
+        state.workspaces[0].layout.focus_pane(root);
+        state.stack_pane().expect("stack outcome");
+
+        let outcome = state.unstack_pane().expect("unstack outcome");
+
+        // The expanded pane (root, first member) stays in the stack; the
+        // bottom member peels off downward.
+        assert!(outcome.changed);
+        assert!(outcome.stacked);
+        assert!(state.workspaces[0].layout.pane_in_stack(root));
+        assert!(state.workspaces[0].layout.pane_in_stack(second));
+        assert!(!state.workspaces[0].layout.pane_in_stack(third));
+        assert_eq!(state.workspaces[0].focused_pane_id(), Some(root));
+        state.workspaces[0].assert_invariants_for_test();
+    }
+
+    #[test]
+    fn unstack_pane_noop_outside_stack() {
+        let mut state = app_with_workspaces(&["test"]);
+        state.workspaces[0].test_split(Direction::Horizontal);
+
+        let outcome = state.unstack_pane().expect("unstack outcome");
+
+        assert!(!outcome.changed);
+        assert_eq!(outcome.reason, Some(PaneStackNoopReason::NotInStack));
+    }
+
+    #[test]
+    fn navigate_pane_right_into_stack_lands_on_expanded_member() {
+        let mut state = app_with_workspaces(&["test"]);
+        let left = state.workspaces[0].tabs[0].root_pane;
+        let first = state.workspaces[0].test_split(Direction::Horizontal);
+        let second = state.workspaces[0].test_split(Direction::Vertical);
+        let third = state.workspaces[0].test_split(Direction::Vertical);
+        assert!(state.workspaces[0]
+            .layout
+            .stack_panes(&[first, second, third], 2));
+        // Shrink the left probe pane until it only overlaps the collapsed
+        // bars at the top of the stack, so a bar would win the directional
+        // pick without the expanded-member redirect.
+        for _ in 0..3 {
+            state.workspaces[0].layout.focus_pane(left);
+            state.workspaces[0].test_split(Direction::Vertical);
+        }
+        state.workspaces[0].layout.focus_pane(left);
+        crate::ui::compute_view_with_runtime_registry(
+            &mut state,
+            &crate::terminal::TerminalRuntimeRegistry::new(),
+            ratatui::layout::Rect::new(0, 0, 100, 24),
+        );
+
+        state.navigate_pane(NavDirection::Right);
+
+        assert_eq!(state.workspaces[0].focused_pane_id(), Some(third));
+        assert_eq!(
+            state.workspaces[0]
+                .layout
+                .expanded_pane_of_stack_containing(first),
+            Some(third)
+        );
+    }
+
+    #[test]
+    fn navigate_pane_down_through_stack_expands_next_member() {
+        let mut state = app_with_workspaces(&["test"]);
+        let root = state.workspaces[0].tabs[0].root_pane;
+        let second = state.workspaces[0].test_split(Direction::Horizontal);
+        state.workspaces[0].layout.focus_pane(root);
+        state.stack_pane().expect("stack outcome");
+        crate::ui::compute_view_with_runtime_registry(
+            &mut state,
+            &crate::terminal::TerminalRuntimeRegistry::new(),
+            ratatui::layout::Rect::new(0, 0, 100, 20),
+        );
+
+        state.navigate_pane(NavDirection::Down);
+        crate::ui::compute_view_with_runtime_registry(
+            &mut state,
+            &crate::terminal::TerminalRuntimeRegistry::new(),
+            ratatui::layout::Rect::new(0, 0, 100, 20),
+        );
+
+        assert_eq!(state.workspaces[0].focused_pane_id(), Some(second));
+        let second_info = state
+            .view
+            .pane_infos
+            .iter()
+            .find(|info| info.id == second)
+            .expect("expanded pane info");
+        assert!(!second_info.collapsed);
+        assert!(second_info.rect.height > 1);
+        let root_info = state
+            .view
+            .pane_infos
+            .iter()
+            .find(|info| info.id == root)
+            .expect("collapsed pane info");
+        assert!(root_info.collapsed);
+        assert_eq!(root_info.rect.height, 1);
     }
 
     #[test]

@@ -397,6 +397,9 @@ pub struct Keybinds {
     pub split_horizontal: ActionKeybinds,
     pub close_pane: ActionKeybinds,
     pub zoom: ActionKeybinds,
+    pub stack_pane: ActionKeybinds,
+    pub unstack_pane: ActionKeybinds,
+    pub break_pane: ActionKeybinds,
     pub resize_mode: ActionKeybinds,
     pub resize_pane_left: ActionKeybinds,
     pub resize_pane_down: ActionKeybinds,
@@ -580,6 +583,9 @@ impl Config {
             split_horizontal: empty_action!(),
             close_pane: empty_action!(),
             zoom: empty_action!(),
+            stack_pane: empty_action!(),
+            unstack_pane: empty_action!(),
+            break_pane: empty_action!(),
             resize_mode: empty_action!(),
             resize_pane_left: empty_action!(),
             resize_pane_down: empty_action!(),
@@ -728,6 +734,9 @@ impl Config {
             apply_action!(keybinds.split_horizontal, split_horizontal, source);
             apply_action!(keybinds.close_pane, close_pane, source);
             apply_action!(keybinds.zoom, zoom, source);
+            apply_action!(keybinds.stack_pane, stack_pane, source);
+            apply_action!(keybinds.unstack_pane, unstack_pane, source);
+            apply_action!(keybinds.break_pane, break_pane, source);
             apply_action!(keybinds.resize_mode, resize_mode, source);
             apply_action!(keybinds.resize_pane_left, resize_pane_left, source);
             apply_action!(keybinds.resize_pane_down, resize_pane_down, source);

@@ -247,6 +247,7 @@ mod tests {
             scrollbar_rect: None,
             borders: ratatui::widgets::Borders::NONE,
             is_focused: true,
+            collapsed: false,
         });
         (app, pane_id)
     }

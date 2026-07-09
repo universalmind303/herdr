@@ -1,8 +1,8 @@
 use crate::api::schema::{
     EmptyParams, Method, PaneFocusDirectionParams, PaneInputSetParams, PaneMoveParams,
-    PaneRenameParams, PaneResizeParams, PaneSplitParams, PaneSwapParams, PaneTarget,
-    PaneZoomParams, Request, TabCreateParams, TabListParams, TabRenameParams, TabTarget,
-    WorkspaceCloseParams, WorkspaceCreateParams, WorkspaceRenameParams, WorkspaceTarget,
+    PaneRenameParams, PaneResizeParams, PaneSplitParams, PaneStackParams, PaneSwapParams,
+    PaneTarget, PaneZoomParams, Request, TabCreateParams, TabListParams, TabRenameParams,
+    TabTarget, WorkspaceCloseParams, WorkspaceCreateParams, WorkspaceRenameParams, WorkspaceTarget,
     WorktreeCreateParams, WorktreeListParams, WorktreeOpenParams, WorktreeRemoveParams,
 };
 
@@ -96,6 +96,14 @@ pub(super) fn pane_resize(params: PaneResizeParams) -> std::io::Result<i32> {
 
 pub(super) fn pane_zoom(params: PaneZoomParams) -> std::io::Result<i32> {
     print_method_response("cli:pane:zoom", Method::PaneZoom(params))
+}
+
+pub(super) fn pane_stack(params: PaneStackParams) -> std::io::Result<i32> {
+    print_method_response("cli:pane:stack", Method::PaneStack(params))
+}
+
+pub(super) fn pane_unstack(params: PaneStackParams) -> std::io::Result<i32> {
+    print_method_response("cli:pane:unstack", Method::PaneUnstack(params))
 }
 
 pub(super) fn pane_rename(params: PaneRenameParams) -> std::io::Result<i32> {

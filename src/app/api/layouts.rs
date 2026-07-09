@@ -87,7 +87,9 @@ impl App {
                     .get(target_ws)
                     .is_some_and(|ws| ws.active_tab_index() == target_tab)
         });
-        let root_leaf = first_layout_leaf(&params.root);
+        let Some(root_leaf) = first_layout_leaf(&params.root) else {
+            return encode_error(id, "invalid_layout", "layout contains no panes");
+        };
         let first_cwd = self.layout_root_cwd(ws_idx, replace_target, root_leaf);
         let (rows, cols) = self.state.estimate_pane_size();
         let default_shell = self.state.default_shell.clone();
@@ -308,6 +310,13 @@ impl App {
                 first: Box::new(self.layout_node_description(ws_idx, tab_idx, first)?),
                 second: Box::new(self.layout_node_description(ws_idx, tab_idx, second)?),
             }),
+            Node::Stack { panes, expanded } => Some(LayoutNode::Stack {
+                panes: panes
+                    .iter()
+                    .map(|pane_id| self.layout_pane_description(ws_idx, tab_idx, *pane_id))
+                    .collect::<Option<Vec<_>>>()?,
+                expanded: *expanded,
+            }),
         }
     }
 
@@ -374,7 +383,9 @@ impl App {
                 first,
                 second,
             } => {
-                let second_leaf = first_layout_leaf(second);
+                let Some(second_leaf) = first_layout_leaf(second) else {
+                    return Err("layout subtree contains no panes".into());
+                };
                 let new_pane = self.layout_split_pane(
                     ws_idx,
                     pane_id,
@@ -384,6 +395,33 @@ impl App {
                 )?;
                 self.apply_layout_node_to_pane(ws_idx, pane_id, first)?;
                 self.apply_layout_node_to_pane(ws_idx, new_pane, second)
+            }
+            LayoutNode::Stack { panes, expanded } => {
+                let Some((first_pane, rest)) = panes.split_first() else {
+                    return Err("stack must contain at least two panes".into());
+                };
+                self.apply_layout_pane_label(ws_idx, pane_id, first_pane);
+                let mut ids = vec![pane_id];
+                let mut previous = pane_id;
+                for pane in rest {
+                    let new_pane =
+                        self.layout_split_pane(ws_idx, previous, SplitDirection::Down, 0.5, pane)?;
+                    ids.push(new_pane);
+                    previous = new_pane;
+                }
+                let stacked = self
+                    .state
+                    .workspaces
+                    .get_mut(ws_idx)
+                    .and_then(|ws| {
+                        let tab_idx = ws.find_tab_index_for_pane(pane_id)?;
+                        ws.tabs.get_mut(tab_idx)
+                    })
+                    .is_some_and(|tab| tab.layout.stack_panes(&ids, *expanded));
+                if !stacked {
+                    return Err("failed to stack layout panes".into());
+                }
+                Ok(())
             }
         }
     }
@@ -515,10 +553,11 @@ impl App {
     }
 }
 
-fn first_layout_leaf(node: &LayoutNode) -> &LayoutPane {
+fn first_layout_leaf(node: &LayoutNode) -> Option<&LayoutPane> {
     match node {
-        LayoutNode::Pane { pane } => pane,
+        LayoutNode::Pane { pane } => Some(pane),
         LayoutNode::Split { first, .. } => first_layout_leaf(first),
+        LayoutNode::Stack { panes, .. } => panes.first(),
     }
 }
 
@@ -569,16 +608,7 @@ fn validate_layout_node(
         ));
     }
     match node {
-        LayoutNode::Pane { pane } => {
-            stats.panes += 1;
-            if stats.panes > MAX_LAYOUT_PANES {
-                return Err(format!("layout has more than {} panes", MAX_LAYOUT_PANES));
-            }
-            layout_command(pane)?;
-            super::env::normalize_launch_env(pane.env.clone())
-                .map_err(|(_, message)| message.to_string())?;
-            Ok(())
-        }
+        LayoutNode::Pane { pane } => validate_layout_pane(pane, stats),
         LayoutNode::Split {
             first,
             second,
@@ -591,7 +621,34 @@ fn validate_layout_node(
             validate_layout_node(first, depth + 1, stats)?;
             validate_layout_node(second, depth + 1, stats)
         }
+        LayoutNode::Stack { panes, expanded } => {
+            if panes.len() < 2 {
+                return Err("stack must contain at least two panes".into());
+            }
+            if *expanded >= panes.len() {
+                return Err(format!(
+                    "stack expanded index {} is out of range for {} panes",
+                    expanded,
+                    panes.len()
+                ));
+            }
+            for pane in panes {
+                validate_layout_pane(pane, stats)?;
+            }
+            Ok(())
+        }
     }
+}
+
+fn validate_layout_pane(pane: &LayoutPane, stats: &mut LayoutTreeStats) -> Result<(), String> {
+    stats.panes += 1;
+    if stats.panes > MAX_LAYOUT_PANES {
+        return Err(format!("layout has more than {} panes", MAX_LAYOUT_PANES));
+    }
+    layout_command(pane)?;
+    super::env::normalize_launch_env(pane.env.clone())
+        .map_err(|(_, message)| message.to_string())?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -797,6 +854,78 @@ mod tests {
                 if layout.tab_id == app.public_tab_id(0, 0).unwrap()
                     && layout.panes.len() == 2
         ));
+        shutdown_test_runtimes(&mut app);
+    }
+
+    #[tokio::test]
+    async fn layout_apply_creates_stack_from_stack_node() {
+        let mut app = app_with_workspace();
+        let original_tab_id = app.public_tab_id(0, 0).unwrap();
+
+        let response = app.handle_layout_apply(
+            "req".into(),
+            LayoutApplyParams {
+                workspace_id: None,
+                tab_id: Some(original_tab_id),
+                tab_label: None,
+                focus: true,
+                root: LayoutNode::Stack {
+                    panes: vec![
+                        LayoutPane {
+                            label: Some("editor".into()),
+                            ..Default::default()
+                        },
+                        LayoutPane {
+                            label: Some("agent".into()),
+                            ..Default::default()
+                        },
+                        LayoutPane {
+                            label: Some("tests".into()),
+                            ..Default::default()
+                        },
+                    ],
+                    expanded: 1,
+                },
+            },
+        );
+
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::LayoutApply { layout } = success.result else {
+            panic!("expected layout apply response");
+        };
+        let LayoutNode::Stack { panes, expanded } = layout.root else {
+            panic!("expected stack layout root");
+        };
+        assert_eq!(panes.len(), 3);
+        assert_eq!(expanded, 1);
+        assert_eq!(panes[0].label.as_deref(), Some("editor"));
+        assert_eq!(panes[1].label.as_deref(), Some("agent"));
+        assert_eq!(panes[2].label.as_deref(), Some("tests"));
+        assert_eq!(app.state.workspaces[0].tabs[0].layout.pane_count(), 3);
+        app.state.workspaces[0].assert_invariants_for_test();
+        shutdown_test_runtimes(&mut app);
+    }
+
+    #[tokio::test]
+    async fn layout_apply_rejects_single_pane_stack() {
+        let mut app = app_with_workspace();
+
+        let response = app.handle_layout_apply(
+            "req".into(),
+            LayoutApplyParams {
+                workspace_id: None,
+                tab_id: None,
+                tab_label: None,
+                focus: true,
+                root: LayoutNode::Stack {
+                    panes: vec![LayoutPane::default()],
+                    expanded: 0,
+                },
+            },
+        );
+
+        let error: ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(error.error.code, "invalid_layout");
         shutdown_test_runtimes(&mut app);
     }
 

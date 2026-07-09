@@ -12,14 +12,12 @@ use crate::api::schema::{
     PaneRenameParams, PaneReportAgentParams, PaneReportAgentSessionParams,
     PaneReportMetadataParams, PaneResizeParams, PaneResizeReason, PaneResizeResult,
     PaneScrollParams, PaneSelectionReadParams, PaneSendInputParams, PaneSendKeysParams,
-    PaneSendTextParams, PaneSplitParams, PaneSwapParams, PaneSwapReason, PaneSwapResult,
-    PaneTarget, PaneTextPoint, PaneTextRange, PaneZoomMode, PaneZoomParams, PaneZoomReason,
-    PaneZoomResult, ResponseResult,
+    PaneSendTextParams, PaneSplitParams, PaneStackParams, PaneStackReason, PaneStackResult,
+    PaneSwapParams, PaneSwapReason, PaneSwapResult, PaneTarget, PaneTextPoint, PaneTextRange,
+    PaneZoomMode, PaneZoomParams, PaneZoomReason, PaneZoomResult, ResponseResult,
 };
-use crate::app::actions::{PaneZoomCommand, PaneZoomNoopReason};
-use crate::app::App;
-#[cfg(test)]
-use crate::app::Mode;
+use crate::app::actions::{PaneStackNoopReason, PaneZoomCommand, PaneZoomNoopReason};
+use crate::app::{App, Mode};
 use crate::layout::{find_in_direction, NavDirection, PaneId};
 
 use super::super::api_helpers::{
@@ -109,6 +107,24 @@ impl App {
                 params.right_click,
                 crate::api::schema::PaneRightClickTarget::Pane
             );
+        }
+        // Stacked placement: the new pane joins the target's stack, or the
+        // pair becomes a new stack with the new pane expanded. Plain splits
+        // leave the split structure alone.
+        if params.stacked {
+            if let Some(tab) = self
+                .state
+                .workspaces
+                .get_mut(ws_idx)
+                .and_then(|ws| ws.tabs.get_mut(target_tab_idx))
+            {
+                if tab.layout.pane_in_stack(target_pane_id) {
+                    tab.layout.join_stack(target_pane_id, new_pane.pane_id);
+                } else {
+                    tab.layout
+                        .stack_panes(&[target_pane_id, new_pane.pane_id], 1);
+                }
+            }
         }
         if params.focus {
             self.state.switch_workspace_tab(ws_idx, target_tab_idx);
@@ -1476,6 +1492,71 @@ impl App {
         encode_success(id, ResponseResult::Ok {})
     }
 
+    pub(super) fn handle_pane_stack(&mut self, id: String, params: PaneStackParams) -> String {
+        self.handle_pane_stack_op(id, params, true)
+    }
+
+    pub(super) fn handle_pane_unstack(&mut self, id: String, params: PaneStackParams) -> String {
+        self.handle_pane_stack_op(id, params, false)
+    }
+
+    fn handle_pane_stack_op(&mut self, id: String, params: PaneStackParams, stack: bool) -> String {
+        let Some((ws_idx, pane_id)) = self.resolve_optional_pane(params.pane_id.as_deref()) else {
+            return encode_error(id, "pane_not_found", "pane not found");
+        };
+        let Some(tab_idx) = self.state.workspaces[ws_idx].find_tab_index_for_pane(pane_id) else {
+            return pane_not_found(
+                id,
+                &self.public_pane_id(ws_idx, pane_id).unwrap_or_default(),
+            );
+        };
+        let Some(pane_public_id) = self.public_pane_id(ws_idx, pane_id) else {
+            return encode_error(id, "pane_not_found", "pane not found");
+        };
+        let outcome = if stack {
+            self.state.apply_pane_stack(ws_idx, pane_id)
+        } else {
+            self.state.apply_pane_unstack(ws_idx, pane_id)
+        };
+        let Some(outcome) = outcome else {
+            return pane_not_found(id, &pane_public_id);
+        };
+        if outcome.changed || outcome.focus_changed {
+            self.schedule_session_save();
+        }
+        self.state.mode = Mode::Terminal;
+        let Some(layout) = self.pane_layout_snapshot(ws_idx, tab_idx) else {
+            return encode_error(id, "pane_layout_unavailable", "pane layout unavailable");
+        };
+        let focused_pane_id = layout.focused_pane_id.clone();
+        if outcome.changed || outcome.focus_changed {
+            self.emit_layout_updated_snapshot(layout.clone());
+        }
+
+        let result = PaneStackResult {
+            changed: outcome.changed || outcome.focus_changed,
+            stack_changed: outcome.changed,
+            focus_changed: outcome.focus_changed,
+            reason: outcome.reason.map(|reason| match reason {
+                PaneStackNoopReason::SinglePane => PaneStackReason::SinglePane,
+                PaneStackNoopReason::NoSibling => PaneStackReason::NoSibling,
+                PaneStackNoopReason::NotInStack => PaneStackReason::NotInStack,
+            }),
+            pane_id: pane_public_id,
+            focused_pane_id,
+            stacked: outcome.stacked,
+            layout,
+        };
+        encode_success(
+            id,
+            if stack {
+                ResponseResult::PaneStack { stack: result }
+            } else {
+                ResponseResult::PaneUnstack { unstack: result }
+            },
+        )
+    }
+
     pub(super) fn handle_pane_rename(&mut self, id: String, params: PaneRenameParams) -> String {
         let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
@@ -2102,7 +2183,15 @@ impl App {
         let tab = self.state.workspaces.get(ws_idx)?.tabs.get(tab_idx)?;
         let panes = tab.layout.panes(self.state.view.terminal_area);
         let source = panes.iter().find(|pane| pane.id == source_pane_id)?;
-        find_in_direction(source, direction.into(), &panes)
+        let target = find_in_direction(source, direction.into(), &panes)?;
+        // Horizontal moves into a stack land on its expanded member, as in
+        // zellij; vertical moves walk the stack member by member.
+        if matches!(direction, PaneDirection::Left | PaneDirection::Right)
+            && panes.iter().any(|pane| pane.id == target && pane.collapsed)
+        {
+            return tab.layout.expanded_pane_of_stack_containing(target);
+        }
+        Some(target)
     }
 
     pub(super) fn pane_layout_snapshot(

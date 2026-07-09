@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+- Added zellij-style pane stacking: `prefix+shift+s` or the pane context menu's `Stack pane` opens a new pane stacked onto the focused pane inside its layout slot, collapsed panes render as one-line title bars with agent status, focusing a collapsed pane expands it, directional splits treat a stack as a single pane and split its region, and `prefix+shift+u` peels one edge pane off the stack. Stacks persist across restore/handoff and are exposed through `pane.split` with `stacked: true`, `pane.stack`, `pane.unstack`, `herdr pane split --stacked`, `herdr pane stack|unstack`, and `stack` nodes in `pane.layout`/`layout.export`/`layout.apply`.
+- Added `break_pane` (`prefix+shift+b`) to break the focused pane out into its own new tab, keeping its running process and scrollback. The new tab inherits the pane's name when one is set, and breaking a tab's only pane is a no-op. The equivalent programmatic paths already exist as `pane.move` with a `new_tab` destination and `herdr pane move <pane_id> --new-tab`.
+
 ## [0.9.2] - 2026-09-29
 
 ### Breaking Changes

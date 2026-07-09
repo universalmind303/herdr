@@ -153,6 +153,7 @@ fn collect_snapshot_ids_inner(node: &LayoutSnapshot, ids: &mut Vec<u32>) {
             collect_snapshot_ids_inner(first, ids);
             collect_snapshot_ids_inner(second, ids);
         }
+        LayoutSnapshot::Stack { panes, .. } => ids.extend(panes.iter().copied()),
     }
 }
 
@@ -182,6 +183,7 @@ fn collect_layout_snapshot_pane_ids(node: &LayoutSnapshot, ids: &mut Vec<u32>) {
             collect_layout_snapshot_pane_ids(first, ids);
             collect_layout_snapshot_pane_ids(second, ids);
         }
+        LayoutSnapshot::Stack { panes, .. } => ids.extend(panes.iter().copied()),
     }
 }
 
@@ -937,6 +939,26 @@ pub(super) fn prune_restored_node(node: Node, surviving: &HashSet<PaneId>) -> Op
                 (None, None) => None,
             }
         }
+        Node::Stack { panes, expanded } => {
+            let expanded_id = panes.get(expanded).copied();
+            let surviving_panes: Vec<PaneId> = panes
+                .into_iter()
+                .filter(|id| surviving.contains(id))
+                .collect();
+            match surviving_panes.len() {
+                0 => None,
+                1 => Some(Node::Pane(surviving_panes[0])),
+                _ => {
+                    let expanded = expanded_id
+                        .and_then(|id| surviving_panes.iter().position(|pane| *pane == id))
+                        .unwrap_or(0);
+                    Some(Node::Stack {
+                        panes: surviving_panes,
+                        expanded,
+                    })
+                }
+            }
+        }
     }
 }
 
@@ -986,6 +1008,29 @@ fn remap_inner(snap: &LayoutSnapshot, id_map: &mut HashMap<u32, PaneId>) -> Node
                 second: Box::new(second_node),
             }
         }
+        LayoutSnapshot::Stack { panes, expanded } => {
+            let new_panes: Vec<PaneId> = panes
+                .iter()
+                .map(|old_id| {
+                    let new_id = PaneId::alloc();
+                    id_map.insert(*old_id, new_id);
+                    new_id
+                })
+                .collect();
+            match new_panes.len() {
+                // A corrupt snapshot with an empty stack degrades to a fresh
+                // pane so restore can still build a valid tree.
+                0 => Node::Pane(PaneId::alloc()),
+                1 => Node::Pane(new_panes[0]),
+                _ => {
+                    let expanded = (*expanded).min(new_panes.len() - 1);
+                    Node::Stack {
+                        panes: new_panes,
+                        expanded,
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1002,6 +1047,7 @@ fn collect_ids_inner(node: &Node, ids: &mut Vec<PaneId>) {
             collect_ids_inner(first, ids);
             collect_ids_inner(second, ids);
         }
+        Node::Stack { panes, .. } => ids.extend(panes.iter().copied()),
     }
 }
 
@@ -1049,6 +1095,64 @@ mod tests {
         assert_eq!(ids.len(), 3);
         let unique: std::collections::HashSet<u32> = ids.iter().map(|id| id.raw()).collect();
         assert_eq!(unique.len(), 3);
+    }
+
+    #[test]
+    fn capture_and_restore_stack_round_trip() {
+        let node = Node::Split {
+            direction: Direction::Horizontal,
+            ratio: 0.5,
+            first: Box::new(Node::Pane(PaneId::from_raw(0))),
+            second: Box::new(Node::Stack {
+                panes: vec![
+                    PaneId::from_raw(1),
+                    PaneId::from_raw(2),
+                    PaneId::from_raw(3),
+                ],
+                expanded: 2,
+            }),
+        };
+
+        let snap = super::super::snapshot::capture_node(&node);
+        let (restored, id_map) = restore_node_remapped(&snap);
+
+        assert_eq!(id_map.len(), 4);
+        let Node::Split { second, .. } = &restored else {
+            panic!("expected split root");
+        };
+        let Node::Stack { panes, expanded } = &**second else {
+            panic!("expected stack to survive the round trip");
+        };
+        assert_eq!(panes.len(), 3);
+        assert_eq!(*expanded, 2);
+        assert_eq!(panes[2], id_map[&3]);
+    }
+
+    #[test]
+    fn prune_restored_stack_drops_missing_panes_and_dissolves() {
+        let first = PaneId::from_raw(21);
+        let second = PaneId::from_raw(22);
+        let third = PaneId::from_raw(23);
+
+        let node = Node::Stack {
+            panes: vec![first, second, third],
+            expanded: 2,
+        };
+        let surviving = HashSet::from([first, third]);
+        let pruned = prune_restored_node(node, &surviving).expect("stack should survive");
+        let Node::Stack { panes, expanded } = pruned else {
+            panic!("expected pruned stack");
+        };
+        assert_eq!(panes, vec![first, third]);
+        assert_eq!(expanded, 1);
+
+        let node = Node::Stack {
+            panes: vec![first, second, third],
+            expanded: 1,
+        };
+        let surviving = HashSet::from([second]);
+        let pruned = prune_restored_node(node, &surviving).expect("lone pane should survive");
+        assert!(matches!(pruned, Node::Pane(id) if id == second));
     }
 
     #[test]

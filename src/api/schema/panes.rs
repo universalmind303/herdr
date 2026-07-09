@@ -32,6 +32,11 @@ pub struct PaneSplitParams {
     pub right_click: PaneRightClickTarget,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub env: HashMap<String, String>,
+    /// Stack the new pane onto the target pane instead of splitting: it joins
+    /// the target's stack (creating one if needed) and becomes the expanded
+    /// member.
+    #[serde(default)]
+    pub stacked: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -125,6 +130,12 @@ pub enum PaneZoomMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
+pub struct PaneStackParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
 pub struct PaneLayoutParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<String>,
@@ -188,6 +199,13 @@ pub enum LayoutNode {
         ratio: f32,
         first: Box<LayoutNode>,
         second: Box<LayoutNode>,
+    },
+    /// A group of panes sharing one region. All panes except the expanded one
+    /// collapse to a one-line title bar.
+    Stack {
+        panes: Vec<LayoutPane>,
+        #[serde(default)]
+        expanded: usize,
     },
 }
 
@@ -587,6 +605,27 @@ pub enum PaneZoomReason {
     SinglePane,
     AlreadyZoomed,
     AlreadyUnzoomed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PaneStackResult {
+    pub changed: bool,
+    pub stack_changed: bool,
+    pub focus_changed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<PaneStackReason>,
+    pub pane_id: String,
+    pub focused_pane_id: String,
+    pub stacked: bool,
+    pub layout: PaneLayoutSnapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneStackReason {
+    SinglePane,
+    NoSibling,
+    NotInStack,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]

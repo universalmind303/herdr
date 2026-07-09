@@ -4,9 +4,9 @@ use crate::api::schema::{
     PaneMoveDestination, PaneMoveParams, PaneNeighborParams, PaneProcessInfoParams, PaneReadParams,
     PaneReleaseAgentParams, PaneRenameParams, PaneReportAgentParams, PaneReportAgentSessionParams,
     PaneReportMetadataParams, PaneResizeParams, PaneRightClickTarget, PaneSendInputParams,
-    PaneSendKeysParams, PaneSendTextParams, PaneSplitParams, PaneSwapParams, PaneTarget,
-    PaneWaitForOutputParams, PaneZoomMode, PaneZoomParams, ReadFormat, ReadSource, Request,
-    SplitDirection,
+    PaneSendKeysParams, PaneSendTextParams, PaneSplitParams, PaneStackParams, PaneSwapParams,
+    PaneTarget, PaneWaitForOutputParams, PaneZoomMode, PaneZoomParams, ReadFormat, ReadSource,
+    Request, SplitDirection,
 };
 
 pub(super) fn run_pane_command(args: &[String]) -> std::io::Result<i32> {
@@ -26,6 +26,8 @@ pub(super) fn run_pane_command(args: &[String]) -> std::io::Result<i32> {
         "focus" => pane_focus(&args[1..]),
         "resize" => pane_resize(&args[1..]),
         "zoom" => pane_zoom(&args[1..]),
+        "stack" => pane_stack(&args[1..]),
+        "unstack" => pane_unstack(&args[1..]),
         "read" => pane_read(&args[1..]),
         "rename" => pane_rename(&args[1..]),
         "input" => pane_input(&args[1..]),
@@ -427,6 +429,65 @@ fn parse_pane_zoom_args(args: &[String]) -> Result<PaneZoomParams, String> {
     Ok(PaneZoomParams { pane_id, mode })
 }
 
+fn pane_stack(args: &[String]) -> std::io::Result<i32> {
+    let params = match parse_pane_stack_args(args, "stack") {
+        Ok(params) => params,
+        Err(message) => {
+            eprintln!("{message}");
+            return Ok(2);
+        }
+    };
+
+    super::runtime::pane_stack(params)
+}
+
+fn pane_unstack(args: &[String]) -> std::io::Result<i32> {
+    let params = match parse_pane_stack_args(args, "unstack") {
+        Ok(params) => params,
+        Err(message) => {
+            eprintln!("{message}");
+            return Ok(2);
+        }
+    };
+
+    super::runtime::pane_unstack(params)
+}
+
+fn parse_pane_stack_args(args: &[String], command: &str) -> Result<PaneStackParams, String> {
+    let mut pane_id = None;
+
+    let mut index = 0;
+    if args
+        .first()
+        .is_some_and(|arg| !arg.as_str().starts_with("--"))
+    {
+        pane_id = args.first().map(|arg| super::normalize_pane_id(arg));
+        index = 1;
+    }
+    while index < args.len() {
+        match args[index].as_str() {
+            "--pane" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err("missing value for --pane".into());
+                };
+                pane_id = Some(super::normalize_pane_id(value));
+                index += 2;
+            }
+            "--current" => {
+                pane_id = None;
+                index += 1;
+            }
+            other => {
+                return Err(format!(
+                    "unknown option: {other}\nusage: herdr pane {command} [PANE_ID] [--pane ID|--current]"
+                ));
+            }
+        }
+    }
+
+    Ok(PaneStackParams { pane_id })
+}
+
 fn pane_rename(args: &[String]) -> std::io::Result<i32> {
     let Some(raw_pane_id) = args.first() else {
         eprintln!("usage: herdr pane rename <pane_id> <label>|--clear");
@@ -639,6 +700,7 @@ fn parse_pane_split_args(
     let mut cwd = None;
     let mut focus = false;
     let mut right_click = PaneRightClickTarget::Herdr;
+    let mut stacked = false;
 
     let mut index = 0;
     if args
@@ -708,6 +770,10 @@ fn parse_pane_split_args(
                 focus = false;
                 index += 1;
             }
+            "--stacked" => {
+                stacked = true;
+                index += 1;
+            }
             "--env" => {
                 let Some(value) = args.get(index + 1) else {
                     return Err("missing value for --env".into());
@@ -720,11 +786,15 @@ fn parse_pane_split_args(
         }
     }
 
-    let Some(direction) = direction else {
-        return Err(
-            "usage: herdr pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--right-click herdr|pane] [--focus] [--no-focus]"
-                .into(),
-        );
+    let direction = match direction {
+        Some(direction) => direction,
+        None if stacked => SplitDirection::Down,
+        None => {
+            return Err(
+                "usage: herdr pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--right-click herdr|pane] [--focus] [--no-focus] [--stacked]"
+                    .into(),
+            )
+        }
     };
 
     Ok(PaneSplitParams {
@@ -736,6 +806,7 @@ fn parse_pane_split_args(
         focus,
         right_click,
         env,
+        stacked,
     })
 }
 
@@ -1683,11 +1754,13 @@ fn print_pane_help() {
         "  herdr pane resize --direction left|right|up|down [--amount FLOAT] [--pane ID|--current]"
     );
     eprintln!("  herdr pane zoom [<pane_id>|--pane ID|--current] [--toggle|--on|--off]");
+    eprintln!("  herdr pane stack [<pane_id>|--pane ID|--current]");
+    eprintln!("  herdr pane unstack [<pane_id>|--pane ID|--current]");
     eprintln!("  herdr pane rename <pane_id> <label>|--clear");
     eprintln!("  herdr pane read <pane_id> [--source visible|recent|recent-unwrapped] [--lines N] [--format text|ansi] [--ansi]");
     eprintln!("  herdr pane input [<pane_id>|--pane ID|--current] --right-click herdr|pane");
     eprintln!(
-        "  herdr pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--right-click herdr|pane] [--focus] [--no-focus]"
+        "  herdr pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--right-click herdr|pane] [--focus] [--no-focus] [--stacked]"
     );
     eprintln!("  herdr pane swap --direction left|right|up|down [--pane ID|--current]");
     eprintln!("  herdr pane swap --source-pane ID --target-pane ID");

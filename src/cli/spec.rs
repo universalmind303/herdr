@@ -513,6 +513,18 @@ fn pane_command() -> Command {
                 .arg(flag("off")),
         )
         .subcommand(
+            Command::new("stack")
+                .about("Stack a pane with its layout sibling")
+                .arg(Arg::new("pane_id").value_name("PANE_ID"))
+                .args(current_pane_args()),
+        )
+        .subcommand(
+            Command::new("unstack")
+                .about("Peel one edge pane off a pane's stack")
+                .arg(Arg::new("pane_id").value_name("PANE_ID"))
+                .args(current_pane_args()),
+        )
+        .subcommand(
             Command::new("read")
                 .about("Read pane terminal output")
                 .arg(required("pane_id", "PANE_ID"))
@@ -551,7 +563,8 @@ fn pane_command() -> Command {
                 .arg(env_option())
                 .arg(option("right-click", "TARGET").value_parser(["herdr", "pane"]))
                 .arg(flag("focus"))
-                .arg(flag("no-focus")),
+                .arg(flag("no-focus"))
+                .arg(flag("stacked")),
         )
         .subcommand(
             Command::new("swap")
